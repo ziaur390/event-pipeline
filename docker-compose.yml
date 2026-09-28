@@ -76,6 +76,35 @@ services:
       MAX_RETRIES: "3"
     restart: unless-stopped
 
+  api:
+    build: ./api
+    container_name: pipeline-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://pipeline:pipeline@postgres:5432/pipeline
+      REDIS_URL: redis://redis:6379/0
+      RABBITMQ_URL: amqp://pipeline:pipeline@rabbitmq:5672/%2F
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: pipeline-nginx
+    depends_on:
+      - api
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    restart: unless-stopped
+
 volumes:
   rabbitmq_data:
   postgres_data:
