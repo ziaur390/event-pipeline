@@ -198,7 +198,11 @@ def on_message(channel, method, properties, body):
                 payload = json.loads(body)
                 record_dead_letter(payload.get("event_id"), payload, exc)
             except Exception:
-                record_dead_letter(None, {"raw": body.decode(errors="replace")}, exc)
+                try:
+                    record_dead_letter(None, {"raw": body.decode(errors="replace")}, exc)
+                except Exception:
+                    # Recording must never kill the consumer; DLQ queue still holds it.
+                    log.exception("could not record dead letter in database")
 
             # requeue=False routes it to the queue's dead-letter exchange.
             channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)

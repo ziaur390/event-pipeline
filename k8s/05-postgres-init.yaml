@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+  namespace: pipeline
+data:
+  init.sql: |
+    CREATE TABLE IF NOT EXISTS events (
+        id           BIGSERIAL PRIMARY KEY,
+        event_id     UUID        NOT NULL UNIQUE,
+        event_type   TEXT        NOT NULL,
+        payload      JSONB       NOT NULL,
+        processed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_events_type         ON events (event_type);
+    CREATE INDEX IF NOT EXISTS idx_events_processed_at ON events (processed_at DESC);
+
+    CREATE TABLE IF NOT EXISTS dead_letters (
+        id         BIGSERIAL PRIMARY KEY,
+        event_id   UUID,
+        payload    JSONB,
+        error      TEXT,
+        failed_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    );

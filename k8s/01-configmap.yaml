@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pipeline-config
+  namespace: pipeline
+data:
+  RABBITMQ_URL: "amqp://pipeline:pipeline@rabbitmq:5672/%2F"
+  REDIS_URL: "redis://redis:6379/0"
+  DATABASE_URL: "postgresql://pipeline:pipeline@postgres:5432/pipeline"
+  MAX_RETRIES: "3"

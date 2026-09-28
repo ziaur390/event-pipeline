@@ -1,0 +1,22 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: consumer
+  namespace: pipeline
+spec:
+  replicas: 2                      # two workers, sharing the same queue
+  selector:
+    matchLabels: {app: consumer}
+  template:
+    metadata:
+      labels: {app: consumer}
+    spec:
+      containers:
+        - name: consumer
+          image: event-pipeline-consumer:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef: {name: pipeline-config}
+          resources:
+            requests: {cpu: "100m", memory: "128Mi"}
+            limits:   {cpu: "500m", memory: "512Mi"}
