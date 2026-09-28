@@ -72,6 +72,8 @@ services:
       RABBITMQ_URL: amqp://pipeline:pipeline@rabbitmq:5672/%2F
       DATABASE_URL: postgresql://pipeline:pipeline@postgres:5432/pipeline
       REDIS_URL: redis://redis:6379/0
+      TEST_MODE: "1"
+      MAX_RETRIES: "3"
     restart: unless-stopped
 
 volumes:
