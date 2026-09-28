@@ -136,23 +136,20 @@ def record_dead_letter(event_id, payload, error):
     )
 
 
-def on_message(channel, method, properties, body):
-    headers = properties.headers or {}
-    attempts = int(headers.get("x-attempts", 0))
+def process(body):
+    """Process one raw event payload. Raises on failure; safe to call twice."""
+    event = json.loads(body)
+    event_id = event["event_id"]
+
+    # ponytail: the guide marks dedup BEFORE processing, so a failed event is
+    # stuck as "seen" and never retries. Fix: release the key on failure so
+    # retries re-run the handler. Race window is ack-based redelivery, rare.
+    first_time = get_redis().set(f"processed:{event_id}", "1", ex=DEDUP_TTL, nx=True)
+    if not first_time:
+        log.info("duplicate (caught by redis) %s", event_id)
+        return
 
     try:
-        event = json.loads(body)
-        event_id = event["event_id"]
-
-        # ponytail: the guide marks dedup BEFORE processing, so a failed event is
-        # stuck as "seen" and never retries. Fix: release the key on failure so
-        # retries re-run the handler. Race window is ack-based redelivery, rare.
-        first_time = get_redis().set(f"processed:{event_id}", "1", ex=DEDUP_TTL, nx=True)
-        if not first_time:
-            log.info("duplicate (caught by redis) %s", event_id)
-            channel.basic_ack(delivery_tag=method.delivery_tag)
-            return
-
         device_id = event["payload"].get("device_id", "unknown")
         zone, was_cached = lookup_zone(device_id)
 
@@ -164,16 +161,22 @@ def on_message(channel, method, properties, body):
                 "stored %s type=%s device=%s zone=%s cache_hit=%s",
                 event_id, event["event_type"], device_id, zone, was_cached,
             )
+    except Exception:
+        # The event was NOT processed, so un-mark it in Redis; otherwise every
+        # retry short-circuits as a "duplicate" and the DLQ path is unreachable.
+        get_redis().delete(f"processed:{event_id}")
+        raise
+
+
+def on_message(channel, method, properties, body):
+    headers = properties.headers or {}
+    attempts = int(headers.get("x-attempts", 0))
+
+    try:
+        process(body)
         channel.basic_ack(delivery_tag=method.delivery_tag)
 
     except Exception as exc:
-        # The event was NOT processed, so un-mark it in Redis; otherwise every
-        # retry short-circuits as a "duplicate" and the DLQ path is unreachable.
-        try:
-            get_redis().delete(f"processed:{event['event_id']}")
-        except Exception:
-            pass
-
         if attempts < MAX_RETRIES:
             log.warning("attempt %d/%d failed, retrying in %dms: %s",
                         attempts + 1, MAX_RETRIES, RETRY_DELAY_MS, exc)
@@ -202,6 +205,14 @@ def on_message(channel, method, properties, body):
 
 
 def main():
+    # Kafka path: same process(), different transport. See brokers.py for why
+    # the two brokers differ in failure handling.
+    from brokers import get_broker
+    broker = get_broker()
+    if broker is not None:
+        broker.run(process)
+        return
+
     while True:
         try:
             connection = pika.BlockingConnection(pika.URLParameters(RABBITMQ_URL))
