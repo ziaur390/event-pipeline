@@ -126,8 +126,8 @@ separate topic.
 | | |
 |---|---|
 | ![RabbitMQ queues](docs/screenshots/rabbitmq-queues.png) |
-| ![Prometheus DLQ depth](docs/screenshots/prometheus-dlq.png) |
 | ![Grafana dashboard](docs/screenshots/grafana-dashboard.png) |
+| ![API stats](docs/screenshots/api-stats.png) |
 | ![Kubernetes pods](docs/screenshots/k8s-pods.png) |
 | ![GitHub Actions CI](docs/screenshots/github-actions.png) |
 
