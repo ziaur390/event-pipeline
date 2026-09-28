@@ -1,0 +1,41 @@
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: pipeline-rabbitmq
+    ports:
+      - "5672:5672"     # AMQP protocol, this is what your code talks to
+      - "15672:15672"   # management web UI
+    environment:
+      RABBITMQ_DEFAULT_USER: pipeline
+      RABBITMQ_DEFAULT_PASS: pipeline
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+
+  producer:
+    build: ./producer
+    container_name: pipeline-producer
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      RABBITMQ_URL: amqp://pipeline:pipeline@rabbitmq:5672/%2F
+      EVENTS_PER_SECOND: "5"
+    restart: unless-stopped
+
+  consumer:
+    build: ./consumer
+    container_name: pipeline-consumer
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      RABBITMQ_URL: amqp://pipeline:pipeline@rabbitmq:5672/%2F
+    restart: unless-stopped
+
+volumes:
+  rabbitmq_data:
