@@ -70,7 +70,17 @@ def lookup_zone(device_id):
     if cached is not None:
         return cached, True
 
-    zone = f"zone-{abs(hash(device_id)) % 8}"
+    zone = None
+    if os.getenv("ORACLE_DSN"):
+        try:
+            from oracle_connector import lookup_zone_from_oracle
+            zone = lookup_zone_from_oracle(device_id)
+        except Exception as exc:
+            # Legacy source being down must not stop the pipeline.
+            log.warning("oracle lookup failed, falling back to simulated: %s", exc)
+
+    if zone is None:
+        zone = f"zone-{abs(hash(device_id)) % 8}"
     get_redis().setex(key, CACHE_TTL, zone)
     return zone, False
 

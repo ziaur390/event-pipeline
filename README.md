@@ -52,9 +52,15 @@ Compose locally and on Kubernetes (kind) in production configuration.
 | API (via Nginx) | http://localhost:8080/health |
 | RabbitMQ management | http://localhost:15672 (pipeline/pipeline) |
 | Prometheus | http://localhost:9090 |
-| Grafana | http://localhost:3000 (admin/admin) |
+| Grafana (auto-provisioned dashboard) | http://localhost:3000/d/event-pipeline (admin/admin) |
 
 Kafka variant: `BROKER=kafka docker compose --profile kafka up -d`
+
+Oracle reference data (optional): `docker compose --profile oracle up -d oracle`,
+then restart the consumer with `ORACLE_DSN=oracle:1521/XEPDB1`. Device zones are
+read from the legacy `reference_devices` table and cached in Redis, so Oracle is
+hit at most once per device per cache TTL. If Oracle is down the pipeline falls
+back to simulated lookups instead of failing.
 
 Kubernetes: see below.
 
@@ -68,6 +74,7 @@ Kubernetes: see below.
 | PostgreSQL | Durable source of truth, with a UNIQUE constraint on event_id as the authoritative idempotency guard. |
 | FastAPI + Nginx | Operational interface behind a reverse proxy with rate limiting. |
 | Prometheus | Queue depth and DLQ depth. DLQ depth is the correctness metric. |
+| Oracle XE (optional) | Legacy reference-data source behind a config flag, cached in Redis. |
 | Kubernetes | Same pipeline, scheduled with replicas and proper liveness/readiness probes. |
 
 ## Design decisions
