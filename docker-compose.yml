@@ -16,6 +16,24 @@ services:
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
 
+  postgres:
+    image: postgres:16-alpine
+    container_name: pipeline-postgres
+    environment:
+      POSTGRES_USER: pipeline
+      POSTGRES_PASSWORD: pipeline
+      POSTGRES_DB: pipeline
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pipeline"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   producer:
     build: ./producer
     container_name: pipeline-producer
@@ -33,9 +51,13 @@ services:
     depends_on:
       rabbitmq:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
     environment:
       RABBITMQ_URL: amqp://pipeline:pipeline@rabbitmq:5672/%2F
+      DATABASE_URL: postgresql://pipeline:pipeline@postgres:5432/pipeline
     restart: unless-stopped
 
 volumes:
   rabbitmq_data:
+  postgres_data:
