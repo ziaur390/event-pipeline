@@ -7,7 +7,7 @@ import psycopg2.extras
 import redis
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import PlainTextResponse
-from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, generate_latest
+from prometheus_client import CONTENT_TYPE_LATEST, Gauge, generate_latest
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s api %(levelname)s %(message)s")
 log = logging.getLogger(__name__)

@@ -15,7 +15,6 @@ native nack and dead-letter exchange; Kafka has neither, so a failed message is
 simply not committed and will be redelivered.
 """
 
-import json
 import logging
 import os
 
