@@ -14,7 +14,7 @@ log = logging.getLogger(__name__)
 
 def lookup_zone_from_oracle(device_id):
     """Read zone_name for a device from the legacy Oracle source, or None."""
-    import oracledb      # imported lazily so the dep is only needed when used
+    import oracledb  # imported lazily so the dep is only needed when used
 
     with oracledb.connect(
         user=os.getenv("ORACLE_USER", "pipeline"),
