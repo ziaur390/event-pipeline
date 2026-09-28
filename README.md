@@ -121,6 +121,16 @@ separate topic.
 | Broker restarts | Durable queues and persistent messages survive |
 | Dependency down at startup | Every service retries its connections instead of exiting |
 
+## Screenshots
+
+| | |
+|---|---|
+| ![RabbitMQ queues](docs/screenshots/rabbitmq-queues.png) |
+| ![Prometheus DLQ depth](docs/screenshots/prometheus-dlq.png) |
+| ![Grafana dashboard](docs/screenshots/grafana-dashboard.png) |
+| ![Kubernetes pods](docs/screenshots/k8s-pods.png) |
+| ![GitHub Actions CI](docs/screenshots/github-actions.png) |
+
 ## Running the tests
 
 ```bash
