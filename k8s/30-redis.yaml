@@ -1,33 +1,109 @@
+# Redis as a StatefulSet, not a Deployment.
+#
+# WHY
+#
+# Redis holds two things for this pipeline:
+#   1. the deduplication keys (processed:<event_id>, one hour TTL)
+#   2. the reference-data cache (device:<id> -> zone, five minute TTL)
+#
+# Without persistence, a Redis restart empties both. Every dedup key is forgotten,
+# so events that were already processed look new again and get handled a second
+# time.
+#
+# That failure is survivable here, and it is worth knowing why: the PostgreSQL
+# UNIQUE constraint on event_id is the authoritative backstop, so a Redis flush
+# degrades performance rather than corrupting data. Redis is an optimisation; the
+# database is the truth. Enabling append-only persistence narrows that window.
+#
+# A StatefulSet is used for the same reason as the other two stateful services: a
+# stable pod name and a stable data directory across restarts.
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-headless
+  namespace: pipeline
+spec:
+  clusterIP: None
+  selector:
+    app: redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: 6379
+---
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: redis
   namespace: pipeline
 spec:
+  serviceName: redis-headless
   replicas: 1
   selector:
-    matchLabels: {app: redis}
+    matchLabels:
+      app: redis
   template:
     metadata:
-      labels: {app: redis}
+      labels:
+        app: redis
     spec:
+      securityContext:
+        fsGroup: 999
       containers:
         - name: redis
           image: redis:7-alpine
+          # appendonly yes turns on the AOF so the dedup keys survive a restart.
+          # --dir must match the mounted volume or the AOF is written to the
+          # container filesystem and lost with the pod.
+          args:
+            - redis-server
+            - --appendonly
+            - "yes"
+            - --dir
+            - /data
           ports:
-            - {containerPort: 6379}
+            - name: redis
+              containerPort: 6379
+          volumeMounts:
+            - name: data
+              mountPath: /data
           readinessProbe:
             exec:
               command: ["redis-cli", "ping"]
             initialDelaySeconds: 3
             periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
 ---
 apiVersion: v1
 kind: Service
 metadata:
+  # Ordinary ClusterIP Service. REDIS_URL is redis://redis:6379/0, so the name stays.
   name: redis
   namespace: pipeline
 spec:
-  selector: {app: redis}
+  selector:
+    app: redis
   ports:
-    - {port: 6379, targetPort: 6379}
+    - name: redis
+      port: 6379
+      targetPort: 6379

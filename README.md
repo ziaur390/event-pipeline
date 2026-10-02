@@ -75,7 +75,7 @@ Kubernetes: see below.
 | FastAPI + Nginx | Operational interface behind a reverse proxy with rate limiting. |
 | Prometheus | Queue depth and DLQ depth. DLQ depth is the correctness metric. |
 | Oracle XE (optional) | Legacy reference-data source behind a config flag, cached in Redis. |
-| Kubernetes | Same pipeline, scheduled with replicas and proper liveness/readiness probes. |
+| Kubernetes | Same pipeline, scheduled with replicas and proper liveness/readiness probes. Stateful services (Postgres, RabbitMQ, Redis) run as StatefulSets with per-pod volumes. |
 
 ## Design decisions
 
@@ -150,5 +150,37 @@ kind load docker-image event-pipeline-consumer:latest --name pipeline
 kind load docker-image event-pipeline-api:latest --name pipeline
 kubectl apply -f k8s/
 kubectl -n pipeline get pods
+kubectl -n pipeline get statefulset,pvc,svc
 kubectl -n pipeline scale deploy/consumer --replicas=4
+kubectl -n pipeline rollout status statefulset/postgres
 ```
+
+### Stateful workloads run as StatefulSets
+
+The three services that hold data use `StatefulSet`, not `Deployment`. That is a
+correctness decision, not a style preference.
+
+| Service | Why it cannot be a Deployment |
+|---|---|
+| **PostgreSQL** | A Deployment mounts one shared `ReadWriteOnce` PVC. Scaling it to two replicas would run two Postgres processes against the same data directory, which is corruption rather than a performance problem. `volumeClaimTemplates` gives each ordinal its own PVC (`data-postgres-0`). |
+| **RabbitMQ** | Mnesia, its Erlang database, ties its state to the node name derived from the hostname. A Deployment gives random hostnames, so every restart comes back as a different node and the queues and persistent messages are no longer the ones it knows. `RABBITMQ_NODENAME` is pinned to the stable pod identity. |
+| **Redis** | It holds the deduplication keys. A restart without persistence forgets them and already-processed events look new. `--appendonly yes` narrows the window. The PostgreSQL `UNIQUE` constraint remains the authoritative guard, so a flush degrades performance rather than correctness. |
+
+Each has two Services: a **headless** Service (`clusterIP: None`) that the
+StatefulSet names in `serviceName` to give each pod a stable DNS record, and an
+ordinary **ClusterIP** Service that the application connects to. The ClusterIP
+names are unchanged (`postgres`, `rabbitmq`, `redis`), so the ConfigMap URLs still
+resolve.
+
+Two settings that are easy to miss:
+
+- **`fsGroup: 999`** - the official Postgres, RabbitMQ and Redis images run as uid
+  999. Without `fsGroup`, Kubernetes mounts the volume owned by root and the
+  container fails to start with a permission error.
+- **`PGDATA=/var/lib/postgresql/data/pgdata`** - a mounted volume root normally
+  contains `lost+found`, and `initdb` refuses to initialise a non-empty directory.
+
+Deleting a StatefulSet does **not** delete its PVCs. That is deliberate: an
+accidental `kubectl delete statefulset postgres` should not destroy the database.
+Remove the volumes explicitly with `kubectl -n pipeline delete pvc data-postgres-0`
+if you mean it.

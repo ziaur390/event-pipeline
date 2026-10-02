@@ -1,38 +1,118 @@
+# RabbitMQ as a StatefulSet, not a Deployment.
+#
+# WHY
+#
+# RabbitMQ keeps its state in Mnesia, an Erlang database whose identity is tied to
+# the node name, which is derived from the hostname. If the hostname changes on
+# restart, the node comes back as a different node and its queues, exchanges,
+# bindings and persistent messages are no longer the ones it knows about.
+#
+# A Deployment gives pods random hostnames (rabbitmq-7d9f8b-x2k4l), so every
+# restart is a new node. A StatefulSet gives the pod the stable name rabbitmq-0,
+# so Mnesia recognises its own data directory and the queues survive.
+#
+# This is the difference between "my queues were empty after the node restarted"
+# and correct behaviour.
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq-headless
+  namespace: pipeline
+spec:
+  clusterIP: None
+  selector:
+    app: rabbitmq
+  ports:
+    - name: amqp
+      port: 5672
+      targetPort: 5672
+---
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: rabbitmq
   namespace: pipeline
 spec:
+  serviceName: rabbitmq-headless
   replicas: 1
   selector:
-    matchLabels: {app: rabbitmq}
+    matchLabels:
+      app: rabbitmq
   template:
     metadata:
-      labels: {app: rabbitmq}
+      labels:
+        app: rabbitmq
     spec:
+      securityContext:
+        # The RabbitMQ image writes /var/lib/rabbitmq as uid 999.
+        fsGroup: 999
       containers:
         - name: rabbitmq
           image: rabbitmq:3.13-management
           env:
-            - {name: RABBITMQ_DEFAULT_USER, value: pipeline}
-            - {name: RABBITMQ_DEFAULT_PASS, value: pipeline}
+            - name: RABBITMQ_DEFAULT_USER
+              value: pipeline
+            - name: RABBITMQ_DEFAULT_PASS
+              value: pipeline
+            # Required for clustering. Unused with one replica, but setting it now
+            # means adding a second node later does not need a rebuild.
+            - name: RABBITMQ_ERLANG_COOKIE
+              value: pipeline-lab-cookie-change-me
+            # Pin the node name to the stable pod identity rather than a random
+            # hostname. This is what makes Mnesia find its own data again.
+            - name: RABBITMQ_NODENAME
+              value: rabbit@pipeline-rabbitmq-0.rabbitmq-headless.pipeline.svc.cluster.local
           ports:
-            - {containerPort: 5672}
-            - {containerPort: 15672}
+            - name: amqp
+              containerPort: 5672
+            - name: mgmt
+              containerPort: 15672
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/rabbitmq
           readinessProbe:
             exec:
               command: ["rabbitmq-diagnostics", "-q", "ping"]
             initialDelaySeconds: 15
             periodSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command: ["rabbitmq-diagnostics", "-q", "ping"]
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            failureThreshold: 4
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
 ---
 apiVersion: v1
 kind: Service
 metadata:
+  # Ordinary ClusterIP Service. The app connects with amqp://...@rabbitmq:5672,
+  # so this name must stay "rabbitmq".
   name: rabbitmq
   namespace: pipeline
 spec:
-  selector: {app: rabbitmq}
+  selector:
+    app: rabbitmq
   ports:
-    - {name: amqp,   port: 5672,  targetPort: 5672}
-    - {name: mgmt,   port: 15672, targetPort: 15672}
+    - name: amqp
+      port: 5672
+      targetPort: 5672
+    - name: mgmt
+      port: 15672
+      targetPort: 15672

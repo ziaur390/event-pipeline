@@ -1,58 +1,149 @@
+# PostgreSQL as a StatefulSet, not a Deployment.
+#
+# WHY THIS MATTERS
+#
+# A Deployment treats its pods as interchangeable: random names, no identity, no
+# ordering. That is correct for a stateless API and wrong for a database. A
+# StatefulSet adds three things a Deployment cannot give you:
+#
+#   1. Stable identity   - the pod is always named postgres-0, so its DNS name and
+#                          its data directory are the same after every restart
+#   2. Per-pod storage   - volumeClaimTemplates creates one PVC per ordinal
+#                          (data-postgres-0), so no two replicas can ever point at
+#                          the same disk
+#   3. Ordered lifecycle - pods are created, scaled and deleted one at a time in
+#                          order, not all at once
+#
+# THE CONCRETE BUG THIS FIXES
+#
+# The previous manifest mounted one ReadWriteOnce PVC shared by the Deployment.
+# Scaling that Deployment to 2 replicas would start two Postgres processes writing
+# to the same data directory. Two writers on one Postgres data directory is
+# database corruption, not a performance problem.
+
 apiVersion: v1
-kind: PersistentVolumeClaim
+kind: Service
 metadata:
-  name: postgres-pvc
+  name: postgres-headless
   namespace: pipeline
 spec:
-  accessModes: ["ReadWriteOnce"]
-  resources:
-    requests:
-      storage: 1Gi
+  # clusterIP: None makes this a headless Service. There is no virtual IP and no
+  # load balancing; it exists purely to give each pod a stable DNS record:
+  #   postgres-0.postgres-headless.pipeline.svc.cluster.local
+  # A StatefulSet requires serviceName to point at a headless Service.
+  clusterIP: None
+  selector:
+    app: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
 ---
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: postgres
   namespace: pipeline
 spec:
+  # Required. Must reference the headless Service above.
+  serviceName: postgres-headless
   replicas: 1
+  # OrderedReady is the default and is what you want for a database: postgres-1 is
+  # not started until postgres-0 reports Ready. Use Parallel only for peers that do
+  # not depend on each other.
+  podManagementPolicy: OrderedReady
   selector:
-    matchLabels: {app: postgres}
+    matchLabels:
+      app: postgres
   template:
     metadata:
-      labels: {app: postgres}
+      labels:
+        app: postgres
     spec:
+      securityContext:
+        # The official Postgres image runs as uid 999. Without fsGroup, Kubernetes
+        # mounts the volume owned by root and initdb fails with a permission error.
+        # This is the single most common StatefulSet-with-Postgres gotcha.
+        fsGroup: 999
       containers:
         - name: postgres
           image: postgres:16-alpine
           env:
-            - {name: POSTGRES_USER,  value: pipeline}
-            - {name: POSTGRES_PASSWORD, value: pipeline}
-            - {name: POSTGRES_DB, value: pipeline}
+            - name: POSTGRES_USER
+              value: pipeline
+            - name: POSTGRES_PASSWORD
+              value: pipeline
+            - name: POSTGRES_DB
+              value: pipeline
+            # Keep data in a subdirectory. A mounted volume root normally contains
+            # lost+found, and initdb refuses to initialise a non-empty directory.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
           ports:
-            - containerPort: 5432
+            - name: postgres
+              containerPort: 5432
           volumeMounts:
-            - {name: data, mountPath: /var/lib/postgresql/data}
-            - {name: init, mountPath: /docker-entrypoint-initdb.d}
+            # "data" is not declared under volumes below: for a StatefulSet it comes
+            # from volumeClaimTemplates, which creates the PVC per pod.
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
           readinessProbe:
+            # Readiness gates traffic and, because podManagementPolicy is
+            # OrderedReady, also gates the next pod.
             exec:
-              command: ["pg_isready", "-U", "pipeline"]
+              command: ["pg_isready", "-U", "pipeline", "-d", "pipeline"]
             initialDelaySeconds: 5
             periodSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            # Liveness restarts a wedged container. A longer initial delay than
+            # readiness, so a slow first start is not mistaken for a hang.
+            exec:
+              command: ["pg_isready", "-U", "pipeline", "-d", "pipeline"]
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          resources:
+            # Requests are what the scheduler reserves; limits stop one pod
+            # starving the node. Missing limits is the most common junior mistake,
+            # and a HorizontalPodAutoscaler cannot work without requests.
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
       volumes:
-        - name: data
-          persistentVolumeClaim:
-            claimName: postgres-pvc
+        # Only the ConfigMap is declared here. The data volume is templated.
         - name: init
           configMap:
             name: postgres-init
+  # One PVC per StatefulSet pod, created automatically and named data-postgres-0.
+  # Deleting the StatefulSet does NOT delete these PVCs: that is deliberate, so an
+  # accidental delete does not destroy the database.
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
 ---
 apiVersion: v1
 kind: Service
 metadata:
+  # This is the ordinary ClusterIP Service, and it is what the app connects to:
+  # DATABASE_URL is postgresql://pipeline:pipeline@postgres:5432/pipeline
+  # Keeping the name "postgres" means the ConfigMap does not need to change.
   name: postgres
   namespace: pipeline
 spec:
-  selector: {app: postgres}
+  selector:
+    app: postgres
   ports:
-    - {port: 5432, targetPort: 5432}
+    - name: postgres
+      port: 5432
+      targetPort: 5432
